@@ -160,36 +160,6 @@ For gasless transactions, deploy a treasury contract:
 3. Copy treasury address to `.env.local`
 4. Fund treasury with XION tokens
 
-## Features Overview
-
-### 1. Home Page
-- Featured games display
-- Protocol statistics
-- Quick onboarding flow
-
-### 2. Dashboard
-- Create new games
-- Manage staking positions
-- Launch tokens
-- View game statistics
-
-### 3. Trading
-- Buy/sell tokens on bonding curves
-- Real-time price updates
-- Trade history
-- Market statistics
-
-### 4. Games Listing
-- Browse all available games
-- Filter by status
-- Quick actions
-
-### 5. Staking
-- Stake XION tokens
-- Manage unbonding
-- Claim rewards
-- View APY
-
 ## Deployment
 
 ### Production Build
@@ -222,20 +192,6 @@ pm2 start npm --name "ddream-frontend" -- start
 sudo systemctl start ddream-frontend
 ```
 
-## Testing
-
-### Manual Testing Checklist
-
-- [ ] Connect with email/social account
-- [ ] Create a new game
-- [ ] Launch token for game
-- [ ] Buy tokens on bonding curve
-- [ ] Sell tokens
-- [ ] Stake XION tokens
-- [ ] Unstake and claim
-- [ ] Check transaction history
-- [ ] Test on mobile devices
-
 ## Troubleshooting
 
 ### Common Issues
@@ -267,28 +223,3 @@ npm install @burnt-labs/abstraxion@latest
 3. Commit changes (`git commit -m 'Add amazing feature'`)
 4. Push to branch (`git push origin feature/amazing`)
 5. Open Pull Request
-
-## Resources
-
-- [DDream Documentation](https://docs.ddream.io)
-- [XION Documentation](https://docs.burnt.com/xion)
-- [Abstraxion SDK](https://docs.burnt.com/xion/abstraxion)
-- [Next.js Documentation](https://nextjs.org/docs)
-- [Tailwind CSS](https://tailwindcss.com/docs)
-
-## Support
-
-- Discord: [DDream Discord](https://discord.gg/ddream)
-- Twitter: [@DDreamProtocol](https://twitter.com/ddream)
-- Email: support@ddream.io
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
-## Acknowledgments
-
-- XION team for Abstraxion SDK
-- Burnt Labs for pattern examples
-- CosmJS for blockchain interaction
-- Next.js team for the framework
