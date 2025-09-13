@@ -261,6 +261,20 @@ export default function Games() {
     
     setLoading(true);
     try {
+
+      // Get all transactions that create a a name game
+      const createTxs = await queryClient.searchTx(
+        `wasm._contract_address='${CONTRACTS.controller}' AND wasm.action='create_game'`
+      )
+      
+      // might be a few wasm events we can combine and then filter by the attribute 
+      const tickers = createTxs
+        .flatMap(tx => tx.events)
+        .filter(event => event.type === 'wasm')
+        .flatMap(event => event.attributes)
+        .filter(attr => attr.key === 'ticker')
+        .map(attr => attr.value);
+      
       // Load games from localStorage (same as dashboard and staking pages)
       const storedGames = localStorage.getItem('ddream_games_detailed');
       const gamesData = storedGames ? JSON.parse(storedGames) : {};
@@ -269,7 +283,7 @@ export default function Games() {
       const gamesList: GameWithStats[] = [];
       
       // Query each game from blockchain for current status
-      for (const ticker of Object.keys(gamesData)) {
+      for (const ticker of tickers) {
         try {
           const gameInfo = await queryContract<GameInfo>(queryClient, CONTRACTS.controller, {
             game_info: { ticker }
