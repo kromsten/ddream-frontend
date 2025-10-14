@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'DDream Protocol',
     description: 'Decentralized Gaming Protocol on XION',
-    url: 'http://localhost:3001',
+    url: 'http://localhost:3000',
     siteName: 'DDream Protocol',
     images: [
       {

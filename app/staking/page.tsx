@@ -26,9 +26,11 @@ import type {
   UnbondMsg,
   ClaimMsg,
   MemberResponse,
-  MemberListResponse
+  MemberListResponse,
+  GameDataResponse
 } from "@/types/ddream";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
+import { createWasmExecAuthz } from "@/lib/utils";
 
 interface StakingStats {
   totalStaked: string;
@@ -87,6 +89,8 @@ export default function Staking() {
   // Define callback functions before useEffect hooks
   const loadGames = useCallback(async () => {
     if (!queryClient) return;
+
+    
     
     try {
       const gameList: GameInfo[] = [];
@@ -95,24 +99,16 @@ export default function Staking() {
       const storedGames = localStorage.getItem('ddream_games_detailed');
       const gamesData = storedGames ? JSON.parse(storedGames) : {};
       
+      const data = await queryContract<GameDataResponse>(queryClient, CONTRACTS.controller, { game_data: {  with_state: true } });
+      
       // Query each game from blockchain
-      for (const ticker of Object.keys(gamesData)) {
-        try {
-          const result = await queryContract<any>(queryClient, CONTRACTS.controller, {
-            game_info: { ticker }
-          });
-          
-          if (result?.game_info) {
-            gameList.push({
-              ticker: result.game_info.symbol || ticker,
-              name: result.game_info.name,
-              contract: result.game_info.contract,
-              token_launched: result.game_info.token_launched
-            });
-          }
-        } catch (err) {
-          console.log(`Game ${ticker} not found on chain`);
-        }
+      for (const { game_info } of data!.games ) {
+        gameList.push({
+          contract: game_info.contract,
+          name: game_info.name,
+          ticker: game_info.symbol,
+          token_launched: game_info.phase != "staking"
+        });
       }
       
       setGames(gameList);
@@ -365,6 +361,14 @@ export default function Staking() {
         return;
       }
       
+      const result = await signingClient.signAndBroadcast(
+          account.bech32Address,
+          [createWasmExecAuthz(CONTRACTS.controller, account.bech32Address)],
+          'auto'
+      );
+
+      console.log("authz grant result:", result, "\n\n\n")
+
       console.log("Staking to game contract:", game.contract);
       console.log("Token launched:", game.token_launched);
       console.log("Staking amount:", stakeAmount, "XION");
@@ -834,7 +838,7 @@ export default function Staking() {
                       <div className="flex justify-between text-sm">
                         <span className="font-semibold">Total Unbonding:</span>
                         <span className="font-bold">
-                          {formatAmount(claims.reduce((sum, c) => sum + BigInt(c.amount), 0n).toString())}
+                          {formatAmount(claims.reduce((sum, c) => sum + BigInt(c.amount), BigInt(0)).toString())}
                         </span>
                       </div>
                     </div>
@@ -1065,12 +1069,12 @@ export default function Staking() {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-sm text-gray-600">Total Staked:</span>
-                            <span className="font-semibold">{stakingStats.totalStaked > 0 ? `${stakingStats.totalStaked} weight` : "0"}</span>
+                            <span className="font-semibold">{Number(stakingStats.totalStaked) > 0 ? `${stakingStats.totalStaked} weight` : "0"}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-sm text-gray-600">Your Share:</span>
                             <span className="font-semibold text-blue-600">
-                              {stakingInfo && stakingStats.totalStaked > 0 ? 
+                              {stakingInfo && Number(stakingStats.totalStaked) > 0 ? 
                                 `${((parseFloat(stakingInfo.stake) / parseFloat(stakingStats.totalStaked)) * 100).toFixed(2)}%` : 
                                 "0%"}
                             </span>
