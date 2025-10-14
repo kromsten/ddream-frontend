@@ -152,7 +152,8 @@ export interface MemberListResponse {
 }
 
 export interface ClaimsResponse {
-  claims: UnbondInfo[];
+  /** List of active unbonding claims */
+  claims: Claim[];
 }
 
 export interface TokenInfoResponse {
@@ -171,4 +172,59 @@ export interface CurveInfoResponse {
 
 export interface BalanceResponse {
   balance: string;
+}
+
+export type GamePhase = 
+  /** Initial staking phase where users can stake tokens */
+  | "staking"
+  /** Bonding curve phase where token can be bought/sold */
+  | "bonding"
+  /** Fair launch phase where liquidity is provided and LP tokens are burned */
+  | "trading";
+
+
+export interface TotalWeightResponse {
+  /** Total voting weight of all members */
+  weight: number;
+  /** Total referral weight accumulated across the entire system */
+  ref_weight?: string;
+}
+
+
+export type GameState = 
+  /** Staking phase - includes total weight information */
+  | { 
+      staking: TotalWeightResponse; 
+    }
+  /** Token phase - includes curve information */
+  | { 
+      token: CurveInfoResponse; 
+    };
+
+/** Information stored about a created game */
+export interface StoredGameInfo {
+  /** Game name (human readable) */
+  name: string;
+  /** Game symbol/ticker */
+  symbol: string;
+  /** The address of the staking contract for this game and then later turned into the token contract */
+  contract: string;
+  /** Current phase of the game (Staking, Bonding, or Trading) */
+  phase: GamePhase;
+  /** The owner/creator of the game */
+  creator: string;
+}
+
+
+export interface GameDatum {
+  /** Game information */
+  game_info: StoredGameInfo;
+  /** Optional state information depending on game phase */
+  state?: GameState;
+}
+
+/** Response for game data query */
+export interface GameDataResponse {
+  /** List of games */
+  games: GameDatum[];
 }

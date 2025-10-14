@@ -26,7 +26,8 @@ import type {
   TokenInfoResponse,
   TokenMarketInfo,
   CreateGameMsg,
-  LaunchTokenMsg
+  LaunchTokenMsg,
+  GameDataResponse
 } from "@/types/ddream";
 
 interface GameWithStats extends GameInfo {
@@ -263,83 +264,31 @@ export default function Games() {
     try {
 
       // Get all transactions that create a a name game
-      const createTxs = await queryClient.searchTx(
-        `wasm._contract_address='${CONTRACTS.controller}' AND wasm.action='create_game'`
-      )
-      
-      // might be a few wasm events we can combine and then filter by the attribute 
-      const tickers = createTxs
-        .flatMap(tx => tx.events)
-        .filter(event => event.type === 'wasm')
-        .flatMap(event => event.attributes)
-        .filter(attr => attr.key === 'ticker')
-        .map(attr => attr.value);
-      
+      const data = await queryContract<GameDataResponse>(queryClient, CONTRACTS.controller, { game_data: {  with_state: true } });
+
       // Load games from localStorage (same as dashboard and staking pages)
       const storedGames = localStorage.getItem('ddream_games_detailed');
       const gamesData = storedGames ? JSON.parse(storedGames) : {};
       setAllGamesData(gamesData); // Store for game details display
       
       const gamesList: GameWithStats[] = [];
-      
-      // Query each game from blockchain for current status
-      for (const ticker of tickers) {
-        try {
-          const gameInfo = await queryContract<GameInfo>(queryClient, CONTRACTS.controller, {
-            game_info: { ticker }
-          });
-          
-          console.log(`Game query response for ${ticker}:`, gameInfo);
-          console.log(`Stored game data for ${ticker}:`, gamesData[ticker]);
-          
-          if (gameInfo) {
-            // Use gameInfo but add fallbacks for missing fields from localStorage
-            const gameWithStats: GameWithStats = {
-              ...gameInfo,
-              ticker: gameInfo.ticker || ticker,
-              name: gameInfo.name || gamesData[ticker]?.name || ticker
-            };
-            
-            // If token is launched, get additional stats
-            if (gameInfo.token_launched && gameInfo.contract) {
-              try {
-                const curveInfo = await queryContract<CurveInfoResponse>(
-                  queryClient,
-                  gameInfo.contract,
-                  { curve_info: {} }
-                );
-                
-                const tokenInfo = await queryContract<TokenInfoResponse>(
-                  queryClient,
-                  gameInfo.contract,
-                  { token_info: {} }
-                );
-                
-                if (curveInfo) {
-                  gameWithStats.price = curveInfo.spot_price;
-                  gameWithStats.marketCap = curveInfo.reserve;
-                }
-                
-                if (tokenInfo) {
-                  gameWithStats.totalSupply = tokenInfo.total_supply;
-                }
-                
-                // In production, query from indexer. For now, estimate based on supply
-                gameWithStats.holders = gameInfo.token_launched ? 
-                  Math.max(10, Math.floor(parseInt(gameWithStats.totalSupply || '0') / 1000000000000)) : 
-                  0;
-              } catch (err) {
-                console.error(`Error loading stats for ${ticker}:`, err);
-              }
-            }
-            
-            gamesList.push(gameWithStats);
-          }
-        } catch (err) {
-          console.log(`Game ${ticker} not found on chain, may have been deleted`);
+
+      for (const { game_info, state } of data!.games) {
+        const gameWithStats: GameWithStats = {
+          ticker: game_info.symbol,
+          name: game_info.name,
+          contract: game_info.contract,
+          token_launched: game_info.phase != "staking",
+        };
+        
+        if (game_info.phase == "bonding") {
+          const { token } = state as { token: CurveInfoResponse};
+          gameWithStats.price = token.spot_price;
+          gameWithStats.marketCap = (parseInt(token.supply) * parseInt(gameWithStats.price)).toFixed(2);
         }
+        gamesList.push(gameWithStats);
       }
-      
+  
       setGames(gamesList);
     } catch (err) {
       console.error("Error loading games:", err);
