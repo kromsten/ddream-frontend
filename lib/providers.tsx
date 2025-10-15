@@ -1,11 +1,21 @@
 'use client';
 
-import { AbstraxionProvider, Abstraxion, useModal } from '@burnt-labs/abstraxion';
+import { AbstraxionProvider, Abstraxion, useModal, ContractGrantDescription, SpendLimit } from '@burnt-labs/abstraxion';
 import { CONTRACTS, NETWORK } from './contracts';
 
 interface ProvidersProps {
   children: React.ReactNode;
 }
+interface AbstraxionConfig {
+    contracts?: ContractGrantDescription[];
+    rpcUrl?: string;
+    stake?: boolean;
+    bank?: SpendLimit[];
+    callbackUrl?: string;
+    treasury?: string;
+    gasPrice?: string;
+}
+
 
 function AbstraxionWrapper({ children }: ProvidersProps) {
   const [, setShowModal] = useModal();
@@ -19,10 +29,10 @@ function AbstraxionWrapper({ children }: ProvidersProps) {
 }
 
 export function Providers({ children }: ProvidersProps) {
-  const abstraxionConfig = {
+  const abstraxionConfig : AbstraxionConfig = {
     treasury: CONTRACTS.treasury,
+    contracts: [CONTRACTS.controller],
     rpcUrl: NETWORK.rpc,
-    restUrl: NETWORK.rest,
   };
 
   return (

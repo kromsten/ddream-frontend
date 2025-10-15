@@ -13,7 +13,6 @@ import {
   executeContract, 
   formatAmount,
   xionToMicro,
-  microToXion,
   CONTRACTS,
   NETWORK
 } from "@/lib/contracts";
@@ -360,30 +359,58 @@ export default function Staking() {
         setError(`Minimum stake amount is ${MIN_STAKE} XION`);
         return;
       }
+
+      console.log("account:", account.bech32Address)
+
+      const authzMSg = createWasmExecAuthz(CONTRACTS.controller, account.bech32Address);
+      console.log("createWasmExecAuthz:", authzMSg)
+
       
-      const result = await signingClient.signAndBroadcast(
+     /*  const result = await signingClient.signAndBroadcast(
           account.bech32Address,
           [createWasmExecAuthz(CONTRACTS.controller, account.bech32Address)],
           'auto'
-      );
-
+      ); 
+      
+      
       console.log("authz grant result:", result, "\n\n\n")
+      */
 
       console.log("Staking to game contract:", game.contract);
       console.log("Token launched:", game.token_launched);
       console.log("Staking amount:", stakeAmount, "XION");
       console.log("Amount in micro:", xionToMicro(stakeAmount));
       
-      const msg: BondMsg = {
+      const addr = account.bech32Address;
+      console.log("addr:", addr)
+      
+   /*    const deploy = { deploy_fee_grant: { 
+        authz_granter: addr, 
+        authz_grantee: CONTRACTS.controller 
+       }}
+      
+      signingClient.granteeAddress
+      const res = await executeContract(
+        signingClient,
+        account.bech32Address,
+        CONTRACTS.treasury,
+        deploy,
+      );
+      console.log("deply res:", res) */
+
+
+      const bond: BondMsg = {
         bond: {
           ...(referralCode && { referrer: referralCode })
         }
       };
+
+      const msg = { proxy_execute: { staking: { bond }  }}
       
       await executeContract(
         signingClient,
         account.bech32Address,
-        game.contract,
+        CONTRACTS.controller,
         msg,
         [{ amount: xionToMicro(stakeAmount), denom: NETWORK.denom }]
       );
