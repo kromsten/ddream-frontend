@@ -10,6 +10,7 @@ import { coins } from '@cosmjs/stargate';
 export const CONTRACTS = {
   controller: process.env.NEXT_PUBLIC_CONTROLLER_ADDRESS || 
     'xion19h9yae5vwa5ctwnwr4yxnkj9x6gthtlevqu9che8lqjngt7p72lslt3yuy',
+  registry: process.env.NEXT_PUBLIC_REGISTRY_ADDRESS || '',
   treasury: process.env.NEXT_PUBLIC_TREASURY_ADDRESS || '',
 };
 
@@ -165,4 +166,24 @@ export function blocksToTimeEstimate(blocks: number): string {
  */
 export function estimateBlockHeight(currentHeight: number, blocksToAdd: number): number {
   return currentHeight + blocksToAdd;
+}
+
+/**
+ * Query registry for user's proxy account
+ */
+export async function queryProxyAccount(
+  client: CosmWasmClient | undefined,
+  userAddress: string
+): Promise<string | null> {
+  if (!client || !CONTRACTS.registry) return null;
+  
+  try {
+    const result = await client.queryContractSmart(CONTRACTS.registry, {
+      account: { address: userAddress }
+    });
+    return result.proxy || null;
+  } catch (error) {
+    console.error('Query proxy account error:', error);
+    return null;
+  }
 }

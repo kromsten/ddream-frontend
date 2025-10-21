@@ -14,22 +14,27 @@ import {
   formatAmount,
   xionToMicro,
   CONTRACTS,
-  NETWORK
+  NETWORK,
+  queryProxyAccount
 } from "@/lib/contracts";
 import type { 
-  GameInfo,
-  StakingInfo,
   ClaimsResponse,
   Claim,
+  GameInfo,
+  StakingInfo,
   BondMsg,
   UnbondMsg,
   ClaimMsg,
   MemberResponse,
   MemberListResponse,
-  GameDataResponse
+  GameDataResponse,
+  Member,
+  RegistryExecuteMsg,
+  GameExecuteMsg,
+  StakingExecuteMsg
 } from "@/types/ddream";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
-import { createWasmExecAuthz } from "@/lib/utils";
+import { toBinary } from "@cosmjs/cosmwasm-stargate";
 
 interface StakingStats {
   totalStaked: string;
@@ -39,11 +44,7 @@ interface StakingStats {
   referralWeight: string;
 }
 
-interface Member {
-  addr: string;
-  weight: string;
-  ref_weight?: string;
-}
+
 
 export default function Staking() {
   const { data: account } = useAbstraxionAccount();
@@ -58,7 +59,7 @@ export default function Staking() {
   const [stakingStats, setStakingStats] = useState<StakingStats>({
     totalStaked: "0",
     totalStakers: 0,
-    apy: 0, // APY will be set when reward system is implemented
+    apy: 0,
     yourWeight: "0",
     referralWeight: "0"
   });
@@ -68,6 +69,7 @@ export default function Staking() {
   const [loadingPosition, setLoadingPosition] = useState(false);
   const [error, setError] = useState<string>("");
   const [success, setSuccess] = useState<string>("");
+  const [proxyAddress, setProxyAddress] = useState<string | null>(null);
   
   // Form state
   const [stakeAmount, setStakeAmount] = useState("");
@@ -106,7 +108,8 @@ export default function Staking() {
           contract: game_info.contract,
           name: game_info.name,
           ticker: game_info.symbol,
-          token_launched: game_info.phase != "staking"
+          phase: game_info.phase,
+          creator: game_info.creator
         });
       }
       
@@ -155,68 +158,52 @@ export default function Staking() {
         });
       } catch (err: any) {
         const errMsg = err.message || err.toString();
-        // If we get an "unknown variant" or similar error, it's likely migrated
         if (errMsg.includes('unknown variant') || errMsg.includes('unrecognized') || errMsg.includes('unauthorized')) {
           console.log("Contract appears to be migrated to token contract");
           isStakingContract = false;
-          
-          // Update local storage to reflect the actual state
-          const storedGames = localStorage.getItem('ddream_games_detailed');
-          if (storedGames) {
-            const gamesData = JSON.parse(storedGames);
-            if (gamesData[game.ticker]) {
-              gamesData[game.ticker].token_launched = true;
-              localStorage.setItem('ddream_games_detailed', JSON.stringify(gamesData));
-            }
-          }
         }
       }
       
-      // If it's not a staking contract or token is launched, show appropriate message
-      if (!isStakingContract || game.token_launched) {
+      // If it's not a staking contract or token is launched (phase !== "staking"), show appropriate message
+      if (!isStakingContract || game.phase !== "staking") {
         console.log("Token already launched or contract migrated, staking not available");
         setStakingInfo(null);
         setError("This game's token has been launched. Staking is no longer available.");
         return;
       }
       
-      // Try to query staking info from game contract
+      // Query staking info - use proxy address if available, otherwise user address
+      const queryAddress = proxyAddress || account.bech32Address;
+      
       try {
         const staking = await queryContract<StakingInfo>(queryClient, game.contract, {
-          staked: { address: account.bech32Address }
+          staked: { address: queryAddress }
         });
         setStakingInfo(staking);
-        setError(""); // Clear any previous errors
+        setError("");
       } catch (queryErr: any) {
         console.error("Failed to query staking info:", queryErr);
         console.error("Query details:", {
           contract: game.contract,
-          address: account.bech32Address,
+          address: queryAddress,
           error: queryErr.message
         });
         
-        // Check if error is because user has no stake (normal case)
-        // The contract returns stake: "0" for users who haven't staked
-        // But if there's an actual query error, we still want to handle it
         const errorMessage = queryErr.message || queryErr.toString();
         
-        // If the query failed but it's not a critical error, assume no stake
-        // Common error patterns for "no stake" or similar non-critical cases
         if (errorMessage.includes('not found') || 
             errorMessage.includes('does not exist') ||
             errorMessage.includes('No stake')) {
-          // User has no stake yet, show as 0
           setStakingInfo({
             stake: "0",
-            denom: NETWORK.denom
+            denom: NETWORK.denom,
+            unbonding: "0"
           });
         } else {
-          // Actual error, set to null which will show "No staking position yet"
-          // But actually, let's try to always show something
-          // Even on error, show 0 stake so UI is consistent
           setStakingInfo({
             stake: "0",
-            denom: NETWORK.denom
+            denom: NETWORK.denom,
+            unbonding: "0"
           });
         }
       }
@@ -224,7 +211,7 @@ export default function Staking() {
       // Query claims/unbondings separately
       try {
         const claimsResponse = await queryContract<ClaimsResponse>(queryClient, game.contract, {
-          claims: { address: account.bech32Address }
+          claims: { address: queryAddress }
         });
         setClaims(claimsResponse?.claims || []);
       } catch (claimsErr: any) {
@@ -232,17 +219,17 @@ export default function Staking() {
         setClaims([]);
       }
       
-      // Try to load member info for weights from game contract
+      // Try to load member info for weights
       try {
         const member = await queryContract<MemberResponse>(queryClient, game.contract, {
-          member: { addr: account.bech32Address }
+          member: { addr: queryAddress }
         });
         
         if (member) {
           setStakingStats(prev => ({
             ...prev,
-            yourWeight: member.weight,
-            referralWeight: member.referral_weight || "0"
+            yourWeight: String(member.weight || 0),
+            referralWeight: member.ref_weight || "0"
           }));
         }
       } catch (err) {
@@ -267,9 +254,8 @@ export default function Staking() {
         });
         
         if (memberList?.members) {
-          // Sort by weight descending and take top 10
           const sorted = memberList.members
-            .sort((a, b) => parseInt(b.weight) - parseInt(a.weight))
+            .sort((a, b) => (b.weight || 0) - (a.weight || 0))
             .slice(0, 10);
           setTopStakers(sorted);
           
@@ -318,12 +304,19 @@ export default function Staking() {
     }
   }, [queryClient, loadGames]);
   
+  // Load proxy address when account changes
+  useEffect(() => {
+    if (queryClient && account?.bech32Address) {
+      queryProxyAccount(queryClient, account.bech32Address).then(setProxyAddress);
+    }
+  }, [queryClient, account?.bech32Address]);
+  
   // Load staking data when game is selected
   useEffect(() => {
     if (queryClient && account?.bech32Address && selectedGame) {
       loadStakingData();
     }
-  }, [queryClient, account?.bech32Address, selectedGame]); // Use account.bech32Address instead of account object
+  }, [queryClient, account?.bech32Address, selectedGame, proxyAddress]);
   
   // Calculate estimated rewards
   function calculateEstimatedRewards(): string {
@@ -333,87 +326,121 @@ export default function Staking() {
   
   // Stake tokens
   async function handleStake() {
-    if (!signingClient || !account || !stakeAmount || !selectedGame) return;
+    if (!signingClient || !account || !stakeAmount || !selectedGame || !CONTRACTS.registry) return;
     
     setLoading(true);
     setError("");
     setSuccess("");
     
     try {
-      // Find the game contract
       const game = games.find(g => g.ticker === selectedGame);
       if (!game || !game.contract) {
         setError("Game contract not found");
         return;
       }
       
-      // Check if token has been launched (contract migrated)
-      if (game.token_launched) {
+      if (game.phase !== "staking") {
         setError("Cannot stake: This game's token has been launched. Staking is no longer available.");
         return;
       }
       
-      // Validate minimum stake amount (10 XION)
       const MIN_STAKE = 10;
       if (parseFloat(stakeAmount) < MIN_STAKE) {
         setError(`Minimum stake amount is ${MIN_STAKE} XION`);
         return;
       }
 
-      console.log("account:", account.bech32Address)
-
-      const authzMSg = createWasmExecAuthz(CONTRACTS.controller, account.bech32Address);
-      console.log("createWasmExecAuthz:", authzMSg)
-
-      
-     /*  const result = await signingClient.signAndBroadcast(
-          account.bech32Address,
-          [createWasmExecAuthz(CONTRACTS.controller, account.bech32Address)],
-          'auto'
-      ); 
-      
-      
-      console.log("authz grant result:", result, "\n\n\n")
-      */
-
       console.log("Staking to game contract:", game.contract);
-      console.log("Token launched:", game.token_launched);
+      console.log("Game phase:", game.phase);
       console.log("Staking amount:", stakeAmount, "XION");
-      console.log("Amount in micro:", xionToMicro(stakeAmount));
-      
-      const addr = account.bech32Address;
-      console.log("addr:", addr)
-      
-   /*    const deploy = { deploy_fee_grant: { 
-        authz_granter: addr, 
-        authz_grantee: CONTRACTS.controller 
-       }}
-      
-      signingClient.granteeAddress
-      const res = await executeContract(
-        signingClient,
-        account.bech32Address,
-        CONTRACTS.treasury,
-        deploy,
-      );
-      console.log("deply res:", res) */
 
+      const stakeAmountMicro = xionToMicro(stakeAmount);
+      const funds = [{ amount: stakeAmountMicro, denom: NETWORK.denom }];
 
-      const bond: BondMsg = {
-        bond: {
+      // Build the staking message for the game contract
+      const staking: StakingExecuteMsg = { 
+          bond: {
           ...(referralCode && { referrer: referralCode })
+          } 
+      };
+
+      const registryForwardMsg: RegistryExecuteMsg = {
+        forward: { 
+            msg: toBinary({
+                game_execute: {
+                    contract_addr: game.contract,
+                    msg: { staking } 
+                }
+            })
         }
       };
 
-      const msg = { proxy_execute: { staking: { bond }  }}
-      
-      await executeContract(
-        signingClient,
-        account.bech32Address,
-        CONTRACTS.controller,
-        msg,
-        [{ amount: xionToMicro(stakeAmount), denom: NETWORK.denom }]
-      );
+      const directProxyMsg = {
+        execute: {
+          msgs: [
+/* 
+            { 
+            
+              wasm: { 
+                execute: {
+                    contract_addr: game.contract,
+                    msg: toBinary(staking),
+                    funds
+                }
+              }
+            }
+             */
+          ]
+        }
+      }
+
+      let existingProxy = proxyAddress;
+      if (!existingProxy && queryClient) {
+        existingProxy = await queryProxyAccount(queryClient, account.bech32Address);
+      }
+
+      console.log("exist pr:", existingProxy)
+
+      if (!existingProxy) {
+        // Create proxy and stake in one transaction
+
+        const instructions = [
+          {
+            contractAddress: CONTRACTS.registry,
+            msg: { create_account: {} },
+            funds: []
+          },
+          {
+            contractAddress: CONTRACTS.registry,
+            msg: registryForwardMsg,
+            funds
+          }
+        ];
+        
+        await signingClient.executeMultiple(
+          account.bech32Address,
+          instructions,
+          'auto'
+        );
+        
+        if (queryClient) {
+          const newProxy = await queryProxyAccount(queryClient, account.bech32Address);
+          setProxyAddress(newProxy);
+        }
+      } else {
+
+        console.log("before exex:", game.contract)
+
+        await executeContract(
+          signingClient,
+          account.bech32Address,
+          existingProxy,
+          directProxyMsg,
+          funds
+        );
+
+        console.log("after exec")
+      }
       
       setSuccess(`Successfully staked ${stakeAmount} XION!`);
       await loadStakingData();
@@ -421,48 +448,19 @@ export default function Staking() {
       setReferralCode("");
     } catch (err: any) {
       console.error("Staking error:", err);
-      console.error("Error details:", {
-        message: err.message,
-        code: err.code,
-        details: err.details,
-        logs: err.logs,
-        rawLog: err.rawLog
-      });
-      
-      // Check if this is an "unauthorized" error indicating a migrated contract
-      if (err.message?.includes('unauthorized')) {
-        setError("This contract appears to have been migrated. Please refresh the page and try a different game.");
-        
-        // Update local storage to mark as launched
-        const storedGames = localStorage.getItem('ddream_games_detailed');
-        if (storedGames) {
-          const gamesData = JSON.parse(storedGames);
-          if (gamesData[selectedGame]) {
-            gamesData[selectedGame].token_launched = true;
-            localStorage.setItem('ddream_games_detailed', JSON.stringify(gamesData));
-          }
-        }
-        
-        // Reload games to reflect the change
-        await loadGames();
-      } else {
-        setError(err.message || "Failed to stake");
-      }
+      setError(err.message || "Failed to stake");
     } finally {
       setLoading(false);
     }
-  }
-  
-  // Unstake tokens
+  }  // Unstake tokens
   async function handleUnstake() {
-    if (!signingClient || !account || !unstakeAmount || !selectedGame) return;
+    if (!signingClient || !account || !unstakeAmount || !selectedGame || !CONTRACTS.registry) return;
     
     setLoading(true);
     setError("");
     setSuccess("");
     
     try {
-      // Find the game contract
       const game = games.find(g => g.ticker === selectedGame);
       if (!game || !game.contract) {
         setError("Game contract not found");
@@ -471,17 +469,31 @@ export default function Staking() {
       
       console.log("Unstaking from game contract:", game.contract);
       
-      const msg: UnbondMsg = {
-        unbond: {
-          tokens: xionToMicro(unstakeAmount)
+      // Direct game execute message (no controller wrapper)
+      const gameExecuteMsg: GameExecuteMsg = {
+        staking: {
+          unbond: {
+            tokens: xionToMicro(unstakeAmount)
+          }
+        }
+      };
+
+      const registryForwardMsg: RegistryExecuteMsg = {
+        forward: {
+          msg: toBinary({
+            game_execute: {
+              contract_addr: game.contract,
+              msg: gameExecuteMsg
+            }
+          })
         }
       };
       
       await executeContract(
         signingClient,
         account.bech32Address,
-        game.contract,
-        msg
+        CONTRACTS.registry,
+        registryForwardMsg
       );
       
       setSuccess(`Successfully initiated unstaking of ${unstakeAmount} XION!`);
@@ -496,14 +508,13 @@ export default function Staking() {
   
   // Claim unbonded tokens
   async function handleClaim() {
-    if (!signingClient || !account || !selectedGame) return;
+    if (!signingClient || !account || !selectedGame || !CONTRACTS.registry) return;
     
     setLoading(true);
     setError("");
     setSuccess("");
     
     try {
-      // Find the game contract
       const game = games.find(g => g.ticker === selectedGame);
       if (!game || !game.contract) {
         setError("Game contract not found");
@@ -512,15 +523,29 @@ export default function Staking() {
       
       console.log("Claiming from game contract:", game.contract);
       
-      const msg: ClaimMsg = {
-        claim: {}
+      // Direct game execute message (no controller wrapper)
+      const gameExecuteMsg: GameExecuteMsg = {
+        staking: {
+          claim: {}
+        }
+      };
+
+      const registryForwardMsg: RegistryExecuteMsg = {
+        forward: {
+          msg: toBinary({
+            game_execute: {
+              contract_addr: game.contract,
+              msg: gameExecuteMsg
+            }
+          })
+        }
       };
       
       await executeContract(
         signingClient,
         account.bech32Address,
-        game.contract,
-        msg
+        CONTRACTS.registry,
+        registryForwardMsg
       );
       
       setSuccess("Successfully claimed unbonded tokens!");
@@ -550,27 +575,9 @@ export default function Staking() {
         return;
       }
       
-      // Create game data structure
-      const gameData = {
-        ticker: result.game_info.symbol || manualTicker.toUpperCase(),
-        name: result.game_info.name,
-        contract: result.game_info.contract,
-        token_launched: result.game_info.token_launched,
-        creator: "unknown", // We don't know the creator from the query
-        createdAt: Date.now(),
-        manually_added: true
-      };
-      
-      // Store in localStorage
-      const storedGames = localStorage.getItem('ddream_games_detailed');
-      const gamesMap = storedGames ? JSON.parse(storedGames) : {};
-      gamesMap[gameData.ticker] = gameData;
-      localStorage.setItem('ddream_games_detailed', JSON.stringify(gamesMap));
-      
-      // Reload games
       await loadGames();
-      setSelectedGame(gameData.ticker);
-      setSuccess(`Game "${gameData.ticker}" added successfully!`);
+      setSelectedGame(result.game_info.symbol || manualTicker.toUpperCase());
+      setSuccess(`Game "${result.game_info.symbol || manualTicker}" found and loaded!`);
       setManualTicker("");
       setShowAddGame(false);
     } catch (err: any) {
@@ -652,7 +659,7 @@ export default function Staking() {
                   }`}
                 >
                   ${game.ticker}
-                  {game.token_launched ? (
+                  {game.phase !== "staking" ? (
                     <span className="block text-xs opacity-75 mt-1 text-orange-400">Launched</span>
                   ) : (
                     <span className="block text-xs opacity-75 mt-1 text-green-400">Stakeable</span>
@@ -663,7 +670,7 @@ export default function Staking() {
             {selectedGame && (
               <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600">
-                  {games.find(g => g.ticker === selectedGame)?.token_launched ? (
+                  {games.find(g => g.ticker === selectedGame)?.phase !== "staking" ? (
                   <>
                     <span className="text-orange-600 font-semibold">
                       ⚠️ {games.find(g => g.ticker === selectedGame)?.name} (${selectedGame})
@@ -730,7 +737,7 @@ export default function Staking() {
         )}
         
         {/* Staking Stats - Only show for non-launched games */}
-        {selectedGame && !games.find(g => g.ticker === selectedGame)?.token_launched && (
+        {selectedGame && games.find(g => g.ticker === selectedGame)?.phase === "staking" && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div className="card">
               <p className="text-sm text-gray-600">Total Weight</p>
@@ -753,7 +760,7 @@ export default function Staking() {
         )}
         
         {account && selectedGame ? (
-          games.find(g => g.ticker === selectedGame)?.token_launched ? (
+          games.find(g => g.ticker === selectedGame)?.phase !== "staking" ? (
             // Token has been launched - show migration notice
             <div className="card bg-orange-50 border-orange-200">
               <div className="text-center py-8">
@@ -836,9 +843,9 @@ export default function Staking() {
                   <h3 className="font-semibold mb-3">Pending Unbonds ({claims.length})</h3>
                   <div className="space-y-2">
                     {claims.map((claim, i) => {
-                      const isReady = claim.release_at.at_time ? 
+                      const isReady = 'at_time' in claim.release_at ? 
                         Date.now() > parseInt(claim.release_at.at_time) / 1000000 :
-                        claim.release_at.at_height ? true : false;
+                        'at_height' in claim.release_at ? true : false;
                       
                       return (
                         <div key={i} className={`p-3 rounded-lg ${isReady ? 'bg-green-50 border border-green-200' : 'bg-gray-50'}`}>
@@ -846,9 +853,9 @@ export default function Staking() {
                             <div>
                               <p className="font-medium">{formatAmount(claim.amount)}</p>
                               <p className="text-sm text-gray-600">
-                                {claim.release_at.at_time ? 
+                                {'at_time' in claim.release_at ? 
                                   `${isReady ? '✅ Ready' : '⏳ Ready'}: ${new Date(parseInt(claim.release_at.at_time) / 1000000).toLocaleDateString()}` :
-                                  claim.release_at.at_height ?
+                                  'at_height' in claim.release_at ?
                                   `At block: ${claim.release_at.at_height} (~10 minutes from unstake)` :
                                   'Never expires'
                                 }
@@ -906,9 +913,6 @@ export default function Staking() {
                         </div>
                         <div className="text-right">
                           <p className="font-semibold">{member.weight}</p>
-                          {member.ref_weight && parseInt(member.ref_weight) > 0 && (
-                            <p className="text-xs text-gray-500">+{member.ref_weight} ref</p>
-                          )}
                         </div>
                       </div>
                     ))}
